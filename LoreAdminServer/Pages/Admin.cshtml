@@ -1,0 +1,164 @@
+@* Copyright Lukas Jech 2026. All Rights Reserved. *@
+@page
+@model LoreBackend.Pages.AdminModel
+@{
+	ViewData["Title"] = "Lore Backend Admin";
+}
+
+<header class="topbar">
+	<div class="container">
+		<h1>Lore Backend</h1>
+	</div>
+</header>
+
+<main class="container">
+
+	<section class="card">
+		<div class="card-head"><h2>Organizations</h2></div>
+		<div class="card-body">
+			<div class="table-wrap">
+				<table class="table">
+					<thead><tr><th>ID</th><th>Slug</th><th>Name</th></tr></thead>
+					<tbody>
+						@if (Model.Orgs.Count == 0)
+						{
+							<tr class="empty"><td colspan="3">No organizations yet.</td></tr>
+						}
+						@foreach (var org in Model.Orgs)
+						{
+							<tr><td class="muted">@org.Id</td><td><b>@org.Slug</b></td><td>@org.Name</td></tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		</div>
+		<form class="card-foot form-grid" method="post" asp-page-handler="Org">
+			<div class="field"><label>Slug</label><input name="slug" placeholder="acme" required /></div>
+			<div class="field"><label>Display name</label><input name="name" placeholder="Acme Inc." /></div>
+			<div class="field-actions"><button class="btn" type="submit">Create organization</button></div>
+		</form>
+	</section>
+
+	<section class="card">
+		<div class="card-head"><h2>Repositories</h2></div>
+		<div class="card-body">
+			<p class="hint">Created from the lore CLI (<code>repository create lore://host/&lt;org&gt;/&lt;repo&gt;</code>) and listed here automatically; the creator becomes the owner.</p>
+			<div class="table-wrap">
+				<table class="table">
+					<thead><tr><th>Name</th><th>Organization</th><th>Lore ID</th></tr></thead>
+					<tbody>
+						@if (Model.Repos.Count == 0)
+						{
+							<tr class="empty"><td colspan="3">No repositories yet.</td></tr>
+						}
+						@foreach (var repo in Model.Repos)
+						{
+							<tr>
+								<td><b>@repo.Name</b></td>
+								<td>@if (string.IsNullOrEmpty(repo.OrgSlug)) {<span class="muted">-</span>} else {@repo.OrgSlug}</td>
+								<td><code class="id">@repo.LoreId</code></td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		</div>
+	</section>
+
+	<section class="card">
+		<div class="card-head"><h2>Users</h2></div>
+		<div class="card-body">
+			<div class="table-wrap">
+				<table class="table">
+					<thead><tr><th>Username</th><th>Organization</th><th>Permissions</th><th></th></tr></thead>
+					<tbody>
+						@foreach (var user in Model.Users)
+						{
+							<tr>
+								<td><b>@user.Username</b>@if (user.IsAdmin) {<text> </text><span class="badge role">admin</span>}</td>
+								<td>@if (string.IsNullOrEmpty(user.OrgSlug)) {<span class="muted">-</span>} else {@user.OrgSlug}</td>
+								<td>
+									@if (user.IsAdmin)
+									{
+										<div class="tags"><span class="tag">all repositories <span class="scope">urc-*</span></span></div>
+									}
+									else if (!Model.Perms[user.Id].Any())
+									{
+										<span class="muted">none</span>
+									}
+									else
+									{
+										<div class="tags">
+											@foreach (var perm in Model.Perms[user.Id])
+											{
+												<span class="tag">@Model.RepoName(perm.RepoLoreId) <span class="scope">@perm.Perms</span></span>
+											}
+										</div>
+									}
+								</td>
+								<td class="actions">
+									<form method="post" asp-page-handler="DeleteUser" onsubmit="return confirm('Delete @user.Username?')">
+										<input type="hidden" name="id" value="@user.Id" />
+										<button class="btn danger sm" type="submit">Delete</button>
+									</form>
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		</div>
+		<form class="card-foot form-grid" method="post" asp-page-handler="User">
+			<div class="field"><label>Username</label><input name="username" required /></div>
+			<div class="field"><label>Password</label><input name="password" type="password" required /></div>
+			<div class="field">
+				<label>Organization</label>
+				<select name="orgId">
+					<option value="">(no organization)</option>
+					@foreach (var org in Model.Orgs)
+					{
+						<option value="@org.Id">@org.Slug</option>
+					}
+				</select>
+			</div>
+			<div class="field check"><input type="checkbox" id="isAdmin" name="isAdmin" value="1" /><label for="isAdmin" class="label-inline">Admin</label></div>
+			<div class="field-actions"><button class="btn" type="submit">Create user</button></div>
+		</form>
+	</section>
+
+	<section class="card">
+		<div class="card-head"><h2>Permissions</h2></div>
+		<div class="card-body">
+			@{ var members = Model.Members.ToList(); }
+			@if (members.Count == 0 || Model.Repos.Count == 0)
+			{
+				<p class="hint">Add a non-admin user and create a repository (via the lore CLI) to grant access.</p>
+			}
+			else
+			{
+				<p class="hint">Grant a user access to a repository. Submitting with no boxes checked revokes their access to that repository.</p>
+				@foreach (var user in members)
+				{
+					<form class="perm-row" method="post" asp-page-handler="Perm">
+						<input type="hidden" name="userId" value="@user.Id" />
+						<div class="who">@user.Username</div>
+						<select name="repo">
+							@foreach (var repo in Model.Repos)
+							{
+								<option value="@repo.LoreId">@repo.Name</option>
+							}
+						</select>
+						<div class="perm-checks">
+							@foreach (var p in Model.AllPerms)
+							{
+								<label><input type="checkbox" name="perm" value="@p" />@p</label>
+							}
+						</div>
+						<button class="btn sm" type="submit">Grant / update</button>
+					</form>
+				}
+			}
+		</div>
+	</section>
+
+</main>

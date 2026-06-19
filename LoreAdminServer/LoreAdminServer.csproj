@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>disable</ImplicitUsings>
+		<RootNamespace>LoreBackend</RootNamespace>
+		<AssemblyName>LoreBackend</AssemblyName>
+		<InvariantGlobalization>true</InvariantGlobalization>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Grpc.AspNetCore" Version="2.71.0" />
+		<PackageReference Include="Grpc.AspNetCore.Server.Reflection" Version="2.71.0" />
+		<PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />
+		<!-- Override the bundled native SQLite to the patched build (advisory GHSA-2m69-gcr7-jv3q). -->
+		<PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.50.3" />
+		<PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.3.0" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<Protobuf Include="Protos/auth_api.proto" ProtoRoot="Protos" GrpcServices="Server" />
+		<Protobuf Include="Protos/rebac_api.proto" ProtoRoot="Protos" GrpcServices="Server" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<None Include="certs/**/*" CopyToOutputDirectory="PreserveNewest" />
+	</ItemGroup>
+
+</Project>

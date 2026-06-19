@@ -1,0 +1,35 @@
+@* Copyright Lukas Jech 2026. All Rights Reserved. *@
+@page
+@model LoreBackend.Pages.LoginModel
+@{
+	ViewData["Title"] = Model.SignedInUser != null ? "Signed in" : "Sign in to Lore";
+}
+
+<div class="login-wrap">
+	@if (Model.SignedInUser != null)
+	{
+		<div class="card login-card center success">
+			<div class="card-body">
+				<h2>Signed in</h2>
+				<p>Signed in as <b>@Model.SignedInUser</b>.</p>
+				<p class="note">You can return to the terminal.</p>
+			</div>
+		</div>
+	}
+	else
+	{
+		<div class="card login-card">
+			<div class="card-head"><h2>Sign in to Lore</h2></div>
+			<form class="card-body" method="post">
+				<input type="hidden" name="Session" value="@Model.Session" />
+				@if (Model.Error != null)
+				{
+					<div class="alert error">@Model.Error</div>
+				}
+				<div class="field"><label>Username</label><input name="username" autofocus required /></div>
+				<div class="field"><label>Password</label><input name="password" type="password" required /></div>
+				<button class="btn" type="submit">Sign in</button>
+			</form>
+		</div>
+	}
+</div>
