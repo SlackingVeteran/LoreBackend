@@ -16,6 +16,7 @@
 		<!-- Override the bundled native SQLite to the patched build (advisory GHSA-2m69-gcr7-jv3q). -->
 		<PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.50.3" />
 		<PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.3.0" />
+		<PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.0" />
 	</ItemGroup>
 
 	<ItemGroup>

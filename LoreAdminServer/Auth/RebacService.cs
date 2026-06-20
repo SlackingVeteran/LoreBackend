@@ -41,7 +41,7 @@ namespace LoreBackend.Auth
             string? orgSlug = slash >= 0 ? name.Substring(0, slash) : null;
             string repoSlug = slash >= 0 ? name.Substring(slash + 1) : name;
 
-            if (user.IsAdmin)
+            if (_store.IsAdmin(user))
             {
                 Org? adminOrg = orgSlug != null ? _store.GetOrgBySlug(orgSlug) : null;
                 _store.UpsertRepo(loreId, adminOrg?.Id, repoSlug, name);
@@ -76,7 +76,7 @@ namespace LoreBackend.Auth
             }
 
             bool owns = _store.GetPerms(user.Id).Any(p => p.RepoLoreId == loreId);
-            if (!user.IsAdmin && !owns)
+            if (!_store.IsAdmin(user) && !owns)
             {
                 throw new RpcException(new Status(StatusCode.PermissionDenied, "not authorized to delete this repository"));
             }

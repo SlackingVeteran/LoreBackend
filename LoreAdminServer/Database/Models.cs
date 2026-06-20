@@ -13,4 +13,6 @@ namespace LoreBackend.Database
     public record ApiKey(long Id, long UserId, string Name, string Created, string Username);
 
     public record ResourceGrant(string ResourceId, string[] Permission);
+
+    public record OidcIdentity(string Username, string? DisplayName, string? PreferredUsername, System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, string>> Claims);
 }

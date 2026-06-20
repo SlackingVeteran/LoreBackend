@@ -48,6 +48,12 @@ namespace LoreBackend.Auth
                 resources.Add(new { resource_id = grant.ResourceId, permission = grant.Permission });
             }
 
+            // Prefer the display name / preferred_username captured from the IdP, falling back
+            // to the bare username for legacy local accounts.
+            OidcIdentity? identity = _store.GetIdentity(user.Username);
+            string name = identity?.DisplayName ?? user.Username;
+            string preferredUsername = identity?.PreferredUsername ?? user.Username;
+
             SecurityTokenDescriptor descriptor = new SecurityTokenDescriptor
             {
                 Issuer = _options.Issuer,
@@ -57,10 +63,10 @@ namespace LoreBackend.Auth
                 Claims = new Dictionary<string, object>
                 {
                     ["sub"] = user.Username,
-                    ["name"] = user.Username,
-                    ["preferred_username"] = user.Username,
-                    ["env"] = "local",
-                    ["idp"] = "lore-dev",
+                    ["name"] = name,
+                    ["preferred_username"] = preferredUsername,
+                    ["env"] = _options.Env,
+                    ["idp"] = _options.Idp,
                     ["aud"] = JsonSerializer.SerializeToElement(_options.Audiences),
                     ["resources"] = JsonSerializer.SerializeToElement(resources),
                 },

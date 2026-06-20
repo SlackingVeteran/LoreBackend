@@ -3,6 +3,9 @@
 using System;
 using System.IO;
 using System.Security.Cryptography.X509Certificates;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -24,12 +27,55 @@ builder.Services.PostConfigure<LoreOptions>(options =>
 });
 
 LoreOptions startupOptions = builder.Configuration.GetSection("Lore").Get<LoreOptions>() ?? new LoreOptions();
+bool oidcEnabled = !string.IsNullOrEmpty(startupOptions.Oidc.ClientId);
 
+builder.Services.AddSingleton<AclEngine>();
 builder.Services.AddSingleton<LoreStore>();
 builder.Services.AddSingleton<TokenService>();
 builder.Services.AddSingleton<SessionStore>();
 builder.Services.AddGrpc();
 builder.Services.AddRazorPages();
+
+AuthenticationBuilder authentication = builder.Services.AddAuthentication(options =>
+{
+    options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = oidcEnabled
+        ? OpenIdConnectDefaults.AuthenticationScheme
+        : CookieAuthenticationDefaults.AuthenticationScheme;
+}).AddCookie();
+
+if (oidcEnabled)
+{
+    authentication.AddOpenIdConnect(options =>
+    {
+        options.Authority = startupOptions.Oidc.Authority;
+        options.ClientId = startupOptions.Oidc.ClientId;
+        options.ClientSecret = startupOptions.Oidc.ClientSecret;
+        options.ResponseType = "code";
+        options.CallbackPath = startupOptions.Oidc.CallbackPath;
+        options.SaveTokens = true;
+        // Keep raw inbound claim names (sub, groups, roles, ...) so ACL rules match what the IdP emits.
+        options.MapInboundClaims = false;
+        options.GetClaimsFromUserInfoEndpoint = true;
+        options.Scope.Clear();
+        foreach (string scope in startupOptions.Oidc.Scopes)
+        {
+            options.Scope.Add(scope);
+        }
+
+        options.TokenValidationParameters.NameClaimType = startupOptions.Oidc.NameClaim;
+
+        // Always force re-authentication at the IdP so group/role claims are current on every login.
+        options.Events = new OpenIdConnectEvents
+        {
+            OnRedirectToIdentityProvider = redirectContext =>
+            {
+                redirectContext.ProtocolMessage.Prompt = "login";
+                return System.Threading.Tasks.Task.CompletedTask;
+            },
+        };
+    });
+}
 
 builder.WebHost.ConfigureKestrel(kestrel =>
 {
@@ -43,8 +89,15 @@ builder.WebHost.ConfigureKestrel(kestrel =>
 });
 
 WebApplication app = builder.Build();
-app.Services.GetRequiredService<LoreStore>().Seed();
+LoreStore store = app.Services.GetRequiredService<LoreStore>();
+// Skip the default admin/admin seed in OIDC mode - no local password accounts there.
+if (!oidcEnabled)
+{
+    store.Seed();
+}
 app.UseStaticFiles();
+app.UseAuthentication();
+app.UseAuthorization();
 app.MapGrpcService<UrcAuthService>();
 app.MapGrpcService<RebacService>();
 app.MapRazorPages();

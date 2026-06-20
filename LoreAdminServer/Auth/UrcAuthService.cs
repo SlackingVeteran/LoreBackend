@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Grpc.Core;
 using Microsoft.Extensions.Logging;
@@ -136,9 +137,29 @@ namespace LoreBackend.Auth
             User? user = await UserFromAuthAsync(context);
             _logger.LogInformation("CheckUserPermission user={User} resources={Resources}", user?.Username ?? "?", string.Join(",", request.ResourceId));
             CheckUserPermissionResponse response = new CheckUserPermissionResponse();
-            if (user != null)
+            if (user == null)
             {
-                response.AllowedResourcePermission.Add(ToProto(_store.ResourcesForUser(user)));
+                return response;
+            }
+
+            // The lore server asks about specific resources and expects the response keyed by the
+            // exact requested id. Match each requested resource against the user's grants (exact,
+            // then the urc-* wildcard) and answer with the requested id, not the wildcard.
+            List<ResourceGrant> grants = _store.ResourcesForUser(user);
+            foreach (string requested in request.ResourceId)
+            {
+                ResourceGrant? match = grants.FirstOrDefault(g => g.ResourceId == requested)
+                    ?? grants.FirstOrDefault(g => g.ResourceId == "urc-*");
+                if (match != null)
+                {
+                    ResourcePermission allowed = new ResourcePermission { ResourceId = requested };
+                    allowed.Permission.AddRange(match.Permission);
+                    response.AllowedResourcePermission.Add(allowed);
+                }
+                else
+                {
+                    response.DeniedResourcePermission.Add(new ResourcePermission { ResourceId = requested });
+                }
             }
 
             return response;

@@ -5,8 +5,10 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Options;
+using LoreBackend.Auth;
 using LoreBackend.Server;
 
 namespace LoreBackend.Database
@@ -16,9 +18,13 @@ namespace LoreBackend.Database
         public static readonly string[] AllPerms = new[] { "read", "write", "obliterate", "admin", "migrate" };
 
         readonly string _connectionString;
+        readonly AclEngine _acl;
+        readonly LoreOptions _options;
 
-        public LoreStore(IOptions<LoreOptions> options)
+        public LoreStore(IOptions<LoreOptions> options, AclEngine acl)
         {
+            _acl = acl;
+            _options = options.Value;
             _connectionString = new SqliteConnectionStringBuilder { DataSource = options.Value.DatabasePath }.ToString();
             using SqliteConnection connection = Open();
             Exec(connection, "PRAGMA journal_mode = WAL");
@@ -47,6 +53,12 @@ CREATE TABLE IF NOT EXISTS perms (
   repo_lore_id TEXT NOT NULL,
   perms        TEXT NOT NULL,
   PRIMARY KEY (user_id, repo_lore_id)
+);
+CREATE TABLE IF NOT EXISTS identities (
+  username           TEXT PRIMARY KEY,
+  display_name       TEXT,
+  preferred_username TEXT,
+  claims_json        TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS api_keys (
   id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -276,6 +288,77 @@ CREATE TABLE IF NOT EXISTS api_keys (
             }
         }
 
+        // ---- OIDC identities ----
+
+        // Ensures an OIDC-authenticated user exists in the users table (for the admin UI and
+        // the IsAdmin escape hatch). OIDC users carry no password.
+        public User UpsertOidcUser(string username)
+        {
+            using SqliteConnection connection = Open();
+            using (SqliteCommand command = Cmd(connection,
+                "INSERT INTO users (username, password_hash, org_id, is_admin) VALUES ($u, '', NULL, 0) ON CONFLICT(username) DO NOTHING",
+                ("$u", username)))
+            {
+                command.ExecuteNonQuery();
+            }
+
+            return GetUser(username)!;
+        }
+
+        public void UpsertIdentity(string username, string? displayName, string? preferredUsername, IEnumerable<KeyValuePair<string, string>> claims)
+        {
+            string claimsJson = JsonSerializer.Serialize(claims.Select(c => new[] { c.Key, c.Value }).ToList());
+            using SqliteConnection connection = Open();
+            using SqliteCommand command = Cmd(connection,
+                "INSERT INTO identities (username, display_name, preferred_username, claims_json) VALUES ($u, $d, $p, $c) ON CONFLICT(username) DO UPDATE SET display_name=excluded.display_name, preferred_username=excluded.preferred_username, claims_json=excluded.claims_json",
+                ("$u", username), ("$d", displayName), ("$p", preferredUsername), ("$c", claimsJson));
+            command.ExecuteNonQuery();
+        }
+
+        public OidcIdentity? GetIdentity(string username)
+        {
+            using SqliteConnection connection = Open();
+            using SqliteCommand command = Cmd(connection, "SELECT username, display_name, preferred_username, claims_json FROM identities WHERE username = $u", ("$u", username));
+            using SqliteDataReader reader = command.ExecuteReader();
+            return reader.Read() ? ReadIdentity(reader) : null;
+        }
+
+        public List<OidcIdentity> ListIdentities()
+        {
+            using SqliteConnection connection = Open();
+            using SqliteCommand command = Cmd(connection, "SELECT username, display_name, preferred_username, claims_json FROM identities ORDER BY display_name, username");
+            using SqliteDataReader reader = command.ExecuteReader();
+            List<OidcIdentity> result = new List<OidcIdentity>();
+            while (reader.Read())
+            {
+                result.Add(ReadIdentity(reader));
+            }
+
+            return result;
+        }
+
+        static OidcIdentity ReadIdentity(SqliteDataReader reader)
+        {
+            List<KeyValuePair<string, string>> claims = new List<KeyValuePair<string, string>>();
+            string[][]? parsed = JsonSerializer.Deserialize<string[][]>(reader.GetString(3));
+            if (parsed != null)
+            {
+                foreach (string[] pair in parsed)
+                {
+                    if (pair.Length == 2)
+                    {
+                        claims.Add(new KeyValuePair<string, string>(pair[0], pair[1]));
+                    }
+                }
+            }
+
+            return new OidcIdentity(
+                reader.GetString(0),
+                reader.IsDBNull(1) ? null : reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                claims);
+        }
+
         // ---- api keys (non-interactive login) ----
         public string CreateApiKey(long userId, string name)
         {
@@ -318,7 +401,31 @@ CREATE TABLE IF NOT EXISTS api_keys (
         static string Sha256Hex(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
         static string Base64Url(byte[] bytes) => Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
-        // JWT `resources` claim / permission checks: admins get the urc-* wildcard, others their grants.
+        // Whether a user is an admin. Local users use the DB is_admin flag; OIDC users (those
+        // with a stored identity) are admins if their captured claims hold the configured
+        // Oidc.AdminClaim (same gate as the dashboard). The DB flag still wins if set.
+        public bool IsAdmin(User user)
+        {
+            if (user.IsAdmin)
+            {
+                return true;
+            }
+
+            OidcIdentity? identity = GetIdentity(user.Username);
+            if (identity == null)
+            {
+                return false;
+            }
+
+            AclClaim admin = _options.Oidc.AdminClaim;
+            return !string.IsNullOrEmpty(admin.Type) && identity.Claims.Any(c =>
+                string.Equals(c.Key, admin.Type, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(c.Value, admin.Value, StringComparison.Ordinal));
+        }
+
+        // JWT `resources` claim / permission checks. Resolution order:
+        //   admins -> urc-* wildcard; OIDC identities -> ACL rules over their claims;
+        //   legacy local users -> their manually-assigned perms.
         public List<ResourceGrant> ResourcesForUser(User user)
         {
             if (user.IsAdmin)
@@ -326,18 +433,29 @@ CREATE TABLE IF NOT EXISTS api_keys (
                 return new List<ResourceGrant> { new ResourceGrant("urc-*", AllPerms) };
             }
 
+            OidcIdentity? identity = GetIdentity(user.Username);
+            if (identity != null)
+            {
+                return _acl.Resolve(identity.Claims);
+            }
+
             return GetPerms(user.Id).Select(p => new ResourceGrant("urc-" + p.RepoLoreId, p.Perms.Split(',', StringSplitOptions.RemoveEmptyEntries))).ToList();
         }
 
-        // Concrete grants for enumeration (LookupUserPermissions): a wildcard cannot be enumerated.
+        // Concrete grants for enumeration (LookupUserPermissions): expand any urc-* wildcard
+        // into one grant per known repository, since a wildcard cannot be enumerated.
         public List<ResourceGrant> LookupResourcesForUser(User user)
         {
-            if (user.IsAdmin)
+            List<ResourceGrant> grants = ResourcesForUser(user);
+            ResourceGrant? wildcard = grants.FirstOrDefault(g => g.ResourceId == "urc-*");
+            if (wildcard == null)
             {
-                return ListRepos().Select(r => new ResourceGrant("urc-" + r.LoreId, AllPerms)).ToList();
+                return grants;
             }
 
-            return ResourcesForUser(user);
+            List<ResourceGrant> expanded = ListRepos().Select(r => new ResourceGrant("urc-" + r.LoreId, wildcard.Permission)).ToList();
+            expanded.AddRange(grants.Where(g => g.ResourceId != "urc-*"));
+            return expanded;
         }
 
         public void Seed()
