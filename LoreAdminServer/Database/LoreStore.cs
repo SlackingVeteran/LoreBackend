@@ -548,10 +548,85 @@ CREATE TABLE IF NOT EXISTS api_keys (
             OidcIdentity? identity = GetIdentity(user.Username);
             if (identity != null)
             {
-                return _acl.Resolve(identity.Claims);
+                // Explicit ACL resource grants, plus the repos the user created in org they have access to
+                List<ResourceGrant> grants = _acl.Resolve(identity.Claims);
+                grants.AddRange(CreatedRepoGrants(user.Id, _acl.ResolveOrgs(identity.Claims)));
+                return MergeGrants(grants);
             }
 
             return GetPerms(user.Id).Select(p => new ResourceGrant("urc-" + p.RepoLoreId, p.Perms.Split(',', StringSplitOptions.RemoveEmptyEntries))).ToList();
+        }
+
+        // Grants for repos the user created (their perms-table rows), filtered to those still under an org the user currently belongs. Revoking org membership drops them.
+        List<ResourceGrant> CreatedRepoGrants(long userId, HashSet<string> orgs)
+        {
+            List<Perm> perms = GetPerms(userId);
+            if (perms.Count == 0)
+            {
+                return new List<ResourceGrant>();
+            }
+
+            Dictionary<string, string> repoOrg = RepoOrgMap();
+            List<ResourceGrant> result = new List<ResourceGrant>();
+            foreach (Perm perm in perms)
+            {
+                if (repoOrg.TryGetValue(perm.RepoLoreId, out string? org) && (orgs.Contains("*") || orgs.Contains(org)))
+                {
+                    result.Add(new ResourceGrant("urc-" + perm.RepoLoreId, perm.Perms.Split(',', StringSplitOptions.RemoveEmptyEntries)));
+                }
+            }
+
+            return result;
+        }
+
+        // Map of repo lore_id -> org slug for repos that have one.
+        Dictionary<string, string> RepoOrgMap()
+        {
+            Dictionary<string, string> map = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (Repo repo in ListRepos())
+            {
+                int slash = repo.Name.IndexOf('/');
+                if (slash >= 0)
+                {
+                    map[repo.LoreId] = repo.Name.Substring(0, slash);
+                }
+            }
+
+            return map;
+        }
+
+        // The org slug a repo belongs to.
+        public string? RepoOrg(string loreId)
+        {
+            Repo? repo = ListRepos().FirstOrDefault(r => r.LoreId == loreId);
+            if (repo == null)
+            {
+                return null;
+            }
+
+            int slash = repo.Name.IndexOf('/');
+            return slash >= 0 ? repo.Name.Substring(0, slash) : null;
+        }
+
+        // Merge grants by resource id
+        static List<ResourceGrant> MergeGrants(IEnumerable<ResourceGrant> grants)
+        {
+            Dictionary<string, HashSet<string>> merged = new Dictionary<string, HashSet<string>>();
+            foreach (ResourceGrant grant in grants)
+            {
+                if (!merged.TryGetValue(grant.ResourceId, out HashSet<string>? set))
+                {
+                    set = new HashSet<string>();
+                    merged[grant.ResourceId] = set;
+                }
+
+                foreach (string perm in grant.Permission)
+                {
+                    set.Add(perm);
+                }
+            }
+
+            return merged.Select(kv => new ResourceGrant(kv.Key, kv.Value.ToArray())).ToList();
         }
 
         // Concrete grants for enumeration (LookupUserPermissions): expand any urc-* wildcard

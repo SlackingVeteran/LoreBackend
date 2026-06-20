@@ -62,7 +62,10 @@ namespace LoreBackend.Auth
 
             Org? org = _store.GetOrgBySlug(orgSlug);
             _store.UpsertRepo(loreId, org?.Id, repoSlug, name);
-            _store.SetPerm(user.Id, loreId, new[] { "admin" });
+            // Creator gets access to their repo via a perms row. OIDC: read/write (surfaced by CreatedRepoGrants, gated on current org membership).
+            // Local: admin/owner (existing).
+            bool oidc = _store.GetIdentity(user.Username) != null;
+            _store.SetPerm(user.Id, loreId, oidc ? new[] { "read", "write" } : new[] { "admin" });
             return new CreateResourceResponse();
         }
 
@@ -76,8 +79,21 @@ namespace LoreBackend.Auth
                 throw new RpcException(new Status(StatusCode.Unauthenticated, "not authenticated"));
             }
 
-            bool owns = _store.GetPerms(user.Id).Any(p => p.RepoLoreId == loreId);
-            if (!_store.IsAdmin(user) && !owns)
+            // Delete authorization: admins always; everyone else must own the repo and currently be in the repo's org.
+            // Losing org access removes delete rights, regaining it restores them.
+            bool authorized;
+            if (_store.IsAdmin(user))
+            {
+                authorized = true;
+            }
+            else
+            {
+                bool owns = _store.GetPerms(user.Id).Any(p => p.RepoLoreId == loreId);
+                string? org = _store.RepoOrg(loreId);
+                authorized = owns && org != null && _store.IsInOrg(user, org);
+            }
+
+            if (!authorized)
             {
                 throw new RpcException(new Status(StatusCode.PermissionDenied, "not authorized to delete this repository"));
             }
