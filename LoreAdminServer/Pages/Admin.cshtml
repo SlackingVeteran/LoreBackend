@@ -13,6 +13,14 @@
 
 <main class="container">
 
+	@if (Model.NewApiKey != null)
+	{
+		<div class="alert ok token-banner">
+			<div>New API token (copy it now, it will not be shown again):</div>
+			<code class="token">@Model.NewApiKey</code>
+		</div>
+	}
+
 	@if (!Model.OidcEnabled)
 	{
 		<section class="card">
@@ -306,5 +314,61 @@
 			</div>
 		</section>
 	}
+
+	<section class="card">
+		<div class="card-head"><h2>API Tokens</h2></div>
+		<div class="card-body">
+			<p class="hint">Non-interactive credentials for headless clients (Horde, CI). </p>
+			<div class="table-wrap">
+				<table class="table">
+					<thead>
+					<tr>
+						<th>User</th>
+						<th>Name</th>
+						<th>Created</th>
+						<th></th>
+					</tr>
+					</thead>
+					<tbody>
+					@if (Model.ApiKeys.Count == 0)
+					{
+						<tr class="empty">
+							<td colspan="4">No API tokens yet.</td>
+						</tr>
+					}
+					@foreach (var key in Model.ApiKeys)
+					{
+						<tr>
+							<td><b>@key.Username</b></td>
+							<td>@key.Name</td>
+							<td class="muted">@key.Created</td>
+							<td class="actions">
+								<form method="post" asp-page-handler="DeleteToken" onsubmit="return confirm('Revoke this token?')">
+									<input type="hidden" name="id" value="@key.Id"/>
+									<button class="btn danger sm" type="submit">Revoke</button>
+								</form>
+							</td>
+						</tr>
+					}
+					</tbody>
+				</table>
+			</div>
+		</div>
+		<form class="card-foot form-grid" method="post" asp-page-handler="CreateToken">
+			<div class="field">
+				<label>User</label>
+				<select name="userId" required>
+					@foreach (var user in Model.Users)
+					{
+						<option value="@user.Id">@user.Username</option>
+					}
+				</select>
+			</div>
+			<div class="field"><label>Token name</label><input name="name" placeholder="horde-ci"/></div>
+			<div class="field-actions">
+				<button class="btn" type="submit">Generate token</button>
+			</div>
+		</form>
+	</section>
 
 </main>
